@@ -96,21 +96,21 @@ jobs:
             fi
           fi
 
-      - name: Generate a token
-        id: generate-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ vars.ADM_ADMIN_AUTOMATION_APP_ID }}
-          private-key: ${{ secrets.ADM_ADMIN_AUTOMATION_APP_PRIVATE_KEY }}
-          owner: ADM-Production
+      #- name: Generate a token
+      #  id: generate-token
+      #  uses: actions/create-github-app-token@v1
+      #  with:
+      #    app-id: ${{ vars.ADM_ADMIN_AUTOMATION_APP_ID }}
+      #    private-key: ${{ secrets.ADM_ADMIN_AUTOMATION_APP_PRIVATE_KEY }}
+      #    owner: ADM-Production
 
-      - name: Generate a token for the target org
-        id: generate-target-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ vars.ADM_ADMIN_AUTOMATION_APP_ID }}
-          private-key: ${{ secrets.ADM_ADMIN_AUTOMATION_APP_PRIVATE_KEY }}
-          owner: ${{ inputs.ORGANIZATION }}
+      #- name: Generate a token for the target org
+      #  id: generate-target-token
+      #  uses: actions/create-github-app-token@v1
+      #  with:
+      #    app-id: ${{ vars.ADM_ADMIN_AUTOMATION_APP_ID }}
+      #    private-key: ${{ secrets.ADM_ADMIN_AUTOMATION_APP_PRIVATE_KEY }}
+      #    owner: ${{ inputs.ORGANIZATION }}
 
       - name: Validate Target Information
         env:
