@@ -1,0 +1,432 @@
+on:
+  workflow_call:
+    inputs:
+      REPO_NAME:
+        type: string
+        description: 'Name of repository'
+        required: true
+      REPO_DESC:
+        type: string
+        description: 'Description of repository'
+        required: true
+      REPO_TYPE:
+        type: string
+        description: 'Type of repository'
+        required: true
+      DATA_CLASSIFICATION:
+        type: string
+        description: 'Data Classification for the Application'
+        required: true
+      ORGANIZATION:
+        type: string
+        description: 'Organization that will hold the repository'
+        required: true
+      DEV_TEAM:
+        type: string
+        description: 'Development team that will own repository'
+        required: true
+
+jobs:
+  create_repo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
+      - name: Dump job context
+        env:
+          JOB_CONTEXT: ${{ toJson(job) }}
+        run: echo "$JOB_CONTEXT"
+      - name: Dump steps context
+        env:
+          STEPS_CONTEXT: ${{ toJson(steps) }}
+        run: echo "$STEPS_CONTEXT"
+      - name: Dump runner context
+        env:
+          RUNNER_CONTEXT: ${{ toJson(runner) }}
+        run: echo "$RUNNER_CONTEXT"
+      - name: Dump strategy context
+        env:
+          STRATEGY_CONTEXT: ${{ toJson(strategy) }}
+        run: echo "$STRATEGY_CONTEXT"
+
+      - name: Validate Repo Name
+        id: valid-repo-name
+        run: |
+          if [[ ${{ inputs.REPO_TYPE }} = "action" ]]; then
+            if [[ ! ${{ inputs.REPO_NAME }} =~ ^action-[a-z][0-9a-z-]*[0-9a-z]$ ]]; then
+              echo ${{ inputs.REPO_NAME }} is not a valid format.  It must start with action.
+              exit 1
+            fi
+            if [[ ${{ inputs.DEV_TEAM }} != "ccoe-dev-ops" ]]; then
+              echo For actions you must select ccoe-dev-ops as the dev team.
+              exit 1
+            fi
+          elif [[ ${{ inputs.REPO_TYPE }} = "workflow" ]]; then
+            if [[ ! ${{ inputs.REPO_NAME }} =~ ^workflow-[a-z][0-9a-z-]*[0-9a-z]$ ]]; then
+              echo ${{ inputs.REPO_NAME }} is not a valid format.  It must start with workflow.
+              exit 1
+            fi
+            if [[ ${{ inputs.DEV_TEAM }} != "ccoe-dev-ops" ]]; then
+              echo For workflows you must select ccoe-dev-ops as the dev team.
+              exit 1
+            fi
+          elif [[ ${{ inputs.REPO_TYPE }} = "bicep-azurerm" ]]; then
+            if [[ ! ${{ inputs.REPO_NAME }} =~ ^bicep-azurerm-[a-z][0-9a-z-]*[0-9a-z]$ ]]; then
+              echo ${{ inputs.REPO_NAME }} is not a valid format.  It must start with bicep-azurerm.
+              exit 1
+            fi
+          else 
+            if [[ ! ${{ inputs.REPO_NAME }} =~ ^[a-z][0-9a-z-]*[0-9a-z]$ ]]; then
+              echo ${{ inputs.REPO_NAME }} is not a valid format.
+              exit 1
+            fi
+            if [[ ${{ inputs.REPO_NAME }} =~ ^action-[a-z][0-9a-z-]*[0-9a-z]$ ]]; then
+              echo ${{ inputs.REPO_NAME }} is not a valid format.  It must not start with action.
+              exit 1
+            fi
+            if [[ ${{ inputs.REPO_NAME }} =~ ^workflow-[a-z][0-9a-z-]*[0-9a-z]$ ]]; then
+              echo ${{ inputs.REPO_NAME }} is not a valid format.  It must not start with workflow.
+              exit 1
+            fi
+            if [[ ${{ inputs.REPO_NAME }} =~ ^bicep-azurerm-[a-z][0-9a-z-]*[0-9a-z]$ ]]; then
+              echo ${{ inputs.REPO_NAME }} is not a valid format.  It must not start with bicep-azurerm.
+              exit 1
+            fi
+          fi
+
+      - name: Generate a token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.ADM_ADMIN_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.ADM_ADMIN_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ADM-Production
+
+      - name: Generate a token for the target org
+        id: generate-target-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.ADM_ADMIN_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.ADM_ADMIN_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.ORGANIZATION }}
+
+      - name: Validate Target Information
+        env:
+          GH_TOKEN: ${{ steps.generate-target-token.outputs.token }}
+        id: validate-target-information
+        run: |
+          gh api graphql -F owner='${{ inputs.ORGANIZATION }}' -F team='${{ inputs.DEV_TEAM }}' -F repoName='${{ inputs.REPO_NAME }}' -F templateName='template-${{ inputs.REPO_TYPE }}' -f query='
+          query($owner: String!, $team: String!, $repoName: String!, $templateName: String!) {
+            organization(login: $owner){
+              id
+              name
+              repository(name: $repoName) {
+                name
+              }
+              repoTemplate: repository(name:$templateName){
+                id
+                name
+              }
+              team(slug: $team){
+                name
+                members{
+                  nodes{
+                    login
+                  }
+                }
+              }
+            }
+          }' | tee target_data.json
+
+          echo "ORGANIZATION_ID="$(jq -r '.data.organization.id' target_data.json) >> $GITHUB_ENV
+          echo "TEMPLATE_REPO_ID="$(jq -r '.data.organization.repoTemplate.id' target_data.json) >> $GITHUB_ENV
+
+          repoName=$(jq -r '.data.organization.repository.name' target_data.json)
+          echo $repoName
+          if [[ $repoName != "null" ]]; then
+            echo ${{ inputs.REPO_NAME }} already exists.
+            exit 1
+          fi
+
+          user=$(jq -r '.data.organization.team.members.nodes[] | select(.login == "${{ github.triggering_actor }}").login' target_data.json)
+          echo "$user"
+          if [ ${{ github.triggering_actor }} != $user ]; then
+            echo ${{ github.triggering_actor }} must be a part of the team that the repository is for.
+            exit 1
+          fi
+
+      - name: Get Tracking Information
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        id: get-tracking-information
+        run: |
+          gh api graphql -F owner='ADM-Production' -F repoName='workflow-create-repository' -F projectNum='3' -f query='
+          query($owner: String!, $repoName: String!, $projectNum: Int!) {
+            organization(login: $owner){
+              id
+              repository(name: $repoName) {
+                id
+                name
+              }
+              projectV2(number:$projectNum){
+                id
+                title
+                number
+                fields(first:20){
+                  nodes{
+                    ... on ProjectV2Field {
+                      id
+                      name
+                    }
+                    ... on ProjectV2IterationField {
+                      id
+                      name
+                      configuration {
+                        iterations {
+                          startDate
+                          id
+                        }
+                      }
+                    }
+                    ... on ProjectV2SingleSelectField {
+                      id
+                      name
+                      options {
+                        id
+                        name
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }' | tee tracking_data.json
+
+          echo "TRACKING_ORGANIZATION_ID="$(jq -r '.data.organization.id' tracking_data.json) >> $GITHUB_ENV
+          echo "TRACKING_REPO_ID="$(jq -r '.data.organization.repository.id' tracking_data.json) >> $GITHUB_ENV
+          echo "TRACKING_PROJECT_ID="$(jq -r '.data.organization.projectV2.id' tracking_data.json) >> $GITHUB_ENV
+          echo "TRACKING_PROJECT_FIELD_ID="$(jq -r '.data.organization.projectV2.id' tracking_data.json) >> $GITHUB_ENV
+
+          echo "TRACKING_PROJECT_FIELD_TRIGGERING_ACTOR_ID="$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Triggering Actor").id' tracking_data.json) >> $GITHUB_ENV
+
+          echo "TRACKING_PROJECT_FIELD_TEAM_ID="$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Team").id' tracking_data.json) >> $GITHUB_ENV
+          echo "TRACKING_PROJECT_FIELD_TEAM_SELECTION="$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Team").options[] | select(.name == "${{ inputs.DEV_TEAM }}").id' tracking_data.json) >> $GITHUB_ENV
+
+          echo "TRACKING_PROJECT_FIELD_ORGANIZATION_ID="$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Organization").id' tracking_data.json) >> $GITHUB_ENV
+          echo "TRACKING_PROJECT_FIELD_ORGANIZATION_SELECTION="$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Organization").options[] | select(.name == "${{ inputs.ORGANIZATION }}").id' tracking_data.json) >> $GITHUB_ENV
+
+          echo "TRACKING_PROJECT_FIELD_REPO_TYPE_ID="$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Repository Type").id' tracking_data.json) >> $GITHUB_ENV
+          echo "TRACKING_PROJECT_FIELD_REPO_TYPE_SELECTION="$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Repository Type").options[] | select(.name == "${{ inputs.REPO_TYPE }}").id' tracking_data.json) >> $GITHUB_ENV
+
+          echo "TRACKING_PROJECT_FIELD_DATA_CLASSIFICATION_ID="$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Data Classification").id' tracking_data.json) >> $GITHUB_ENV
+          echo "TRACKING_PROJECT_FIELD_DATA_CLASSIFICATION_SELECTION="$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Data Classification").options[] | select(.name == "${{ inputs.DATA_CLASSIFICATION }}").id' tracking_data.json) >> $GITHUB_ENV
+
+      - name: Create Issue
+        id: create-issue
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          gh api graphql -f query='
+          mutation {
+            createIssue(input: {repositoryId: "${{ env.TRACKING_REPO_ID }}", title: "${{ inputs.REPO_NAME }}", body: "${{ github.event.repository.html_url }}/actions/runs/${{ github.run_id }}"}) {
+              issue {
+                id
+                number
+                body
+              }
+            }
+          }' | tee issue_data.json
+          echo "ISSUE_ID="$(jq -r '.data.createIssue.issue.id' issue_data.json) >> $GITHUB_ENV
+
+      - name: Add Issue to Project
+        id: add-issue-to-project
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          gh api graphql -f query='
+          mutation {
+            addProjectV2ItemById(input: {projectId: "${{ env.TRACKING_PROJECT_ID }}" contentId: "${{ env.ISSUE_ID }}" }) {
+              item {
+                id
+              }
+            }
+          }' | tee proj_item_data.json
+          echo "TRACKING_PROJECT_ITEM_ID="$(jq -r '.data.addProjectV2ItemById.item.id' proj_item_data.json) >> $GITHUB_ENV
+
+      - name: Set Team Name
+        id: set-team-name
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          gh api graphql -f query='
+          mutation {
+            updateProjectV2ItemFieldValue(input: {projectId: "${{ env.TRACKING_PROJECT_ID }}" itemId: "${{ env.TRACKING_PROJECT_ITEM_ID }}" fieldId: "${{ env.TRACKING_PROJECT_FIELD_TEAM_ID }}"
+                value: { singleSelectOptionId: "${{ env.TRACKING_PROJECT_FIELD_TEAM_SELECTION }}" }}) {
+              projectV2Item {
+                id
+              }
+            }
+          }'
+
+      - name: Set Organization
+        id: set-organization
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          gh api graphql -f query='
+          mutation {
+            updateProjectV2ItemFieldValue(input: {projectId: "${{ env.TRACKING_PROJECT_ID }}" itemId: "${{ env.TRACKING_PROJECT_ITEM_ID }}" fieldId: "${{ env.TRACKING_PROJECT_FIELD_ORGANIZATION_ID }}"
+                value: { singleSelectOptionId: "${{ env.TRACKING_PROJECT_FIELD_ORGANIZATION_SELECTION }}" }}) {
+              projectV2Item {
+                id
+              }
+            }
+          }'
+
+      - name: Set Repo Type
+        id: set-repo-type
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          gh api graphql -f query='
+          mutation {
+            updateProjectV2ItemFieldValue(input: {projectId: "${{ env.TRACKING_PROJECT_ID }}" itemId: "${{ env.TRACKING_PROJECT_ITEM_ID }}" fieldId: "${{ env.TRACKING_PROJECT_FIELD_REPO_TYPE_ID }}"
+                value: { singleSelectOptionId: "${{ env.TRACKING_PROJECT_FIELD_REPO_TYPE_SELECTION }}" }}) {
+              projectV2Item {
+                id
+              }
+            }
+          }'
+          
+      - name: Set Data Classification
+        id: set-data-classification
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          gh api graphql -f query='
+          mutation {
+            updateProjectV2ItemFieldValue(input: {projectId: "${{ env.TRACKING_PROJECT_ID }}" itemId: "${{ env.TRACKING_PROJECT_ITEM_ID }}" fieldId: "${{ env.TRACKING_PROJECT_FIELD_DATA_CLASSIFICATION_ID }}"
+                value: { singleSelectOptionId: "${{ env.TRACKING_PROJECT_FIELD_DATA_CLASSIFICATION_SELECTION }}" }}) {
+              projectV2Item {
+                id
+              }
+            }
+          }'
+
+      - name: Set Triggering Actor
+        id: set-triggering-actor
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          gh api graphql -f query='
+          mutation {
+            updateProjectV2ItemFieldValue(input: {projectId: "${{ env.TRACKING_PROJECT_ID }}" itemId: "${{ env.TRACKING_PROJECT_ITEM_ID }}" fieldId: "${{ env.TRACKING_PROJECT_FIELD_TRIGGERING_ACTOR_ID }}"
+                value: { text: "${{ github.triggering_actor }}" }}) {
+              projectV2Item {
+                id
+              }
+            }
+          }'
+      
+      - name: Create the Repository
+        id: create-repo
+        env:
+          GH_TOKEN: ${{ steps.generate-target-token.outputs.token }}
+        run: |
+          gh api graphql -f query='
+          mutation {
+            cloneTemplateRepository(input:{ownerId:"${{ env.ORGANIZATION_ID }}" repositoryId:"${{ env.TEMPLATE_REPO_ID }}" name:"${{ inputs.REPO_NAME }}" description:"${{ inputs.REPO_DESC }}" visibility:PRIVATE }){
+              repository{
+                id
+                name
+                createdAt
+              }
+            }
+          }' | tee new_repo_data.json
+          newRepoID=$(jq -r '.data.repository.id' new_repo_data.json)
+          sleep 10
+
+      - name: Update Repo Settings
+        id: update-repo
+        env:
+          GH_TOKEN: ${{ steps.generate-target-token.outputs.token }}
+        run: |
+          gh api \
+            --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ inputs.ORGANIZATION }}/${{ inputs.REPO_NAME }} \
+            -F "private=true" -F "allow_rebase_merge=false" -F "allow_update_branch=true" -F "allow_auto_merge=true" -F "delete_branch_on_merge=true"
+
+      - name: Update Repo Workflow Settings
+        id: update-repo-wf-setting
+        if: ${{ inputs.REPO_TYPE == 'action' || inputs.REPO_TYPE == 'workflow' }}
+        env:
+          GH_TOKEN: ${{ steps.generate-target-token.outputs.token }}
+        run: |
+          gh api \
+            --method PUT \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ inputs.ORGANIZATION }}/${{ inputs.REPO_NAME }}/actions/permissions/access \
+             -f "access_level=organization"
+
+      - name: Set Repo Type Property
+        id: set-repo-type-property
+        env:
+          GH_TOKEN: ${{ steps.generate-target-token.outputs.token }}
+        run: |
+          gh api \
+            --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ inputs.ORGANIZATION }}/${{ inputs.REPO_NAME }}/properties/values \
+            -f "properties[][property_name]=repo-type" -f "properties[][value]=${{ inputs.REPO_TYPE }}"
+            
+      - name: Add CODEOWNERS file
+        env:
+          GH_TOKEN: ${{ steps.generate-target-token.outputs.token }}
+        run: |
+          CODEOWNER="*  @${{ inputs.ORGANIZATION }}/${{ inputs.DEV_TEAM }}
+          /.github/workflows  @${{ inputs.ORGANIZATION }}/ccoe-dev-ops
+          /.github/.CODEOWNERS  @${{ inputs.ORGANIZATION }}/ccoe-dev-ops
+          /.CODEOWNERS  @${{ inputs.ORGANIZATION }}/ccoe-dev-ops"
+          CODEOWNER_64=$(echo "$CODEOWNER" | base64)
+          echo "$CODEOWNER"
+          echo "$CODEOWNER_64"
+          gh api \
+            --method PUT \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ inputs.ORGANIZATION }}/${{ inputs.REPO_NAME }}/contents/.github/.CODEOWNERS \
+            -f "message=add .CODEOWNERS file" -f "content=$CODEOWNER_64"
+
+      - name: Add Permission
+        id: add-permission
+        env:
+          GH_TOKEN: ${{ steps.generate-target-token.outputs.token }}
+        run: |
+          gh api \
+            --method PUT \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /orgs/${{ inputs.ORGANIZATION }}/teams/${{ inputs.DEV_TEAM }}/repos/${{ inputs.ORGANIZATION }}/${{ inputs.REPO_NAME }} \
+            -f "permission=push"
+            
+      - name: Close Issue
+        id: close-issue
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          gh api graphql -f query='
+          mutation {
+            closeIssue(input:{issueId:"${{ env.ISSUE_ID }}" stateReason:COMPLETED}){
+              issue{
+                id
+                title
+                closedAt
+              }
+            }
+          }'
