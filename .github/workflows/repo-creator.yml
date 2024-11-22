@@ -59,19 +59,19 @@ jobs:
               echo ${{ inputs.REPO_NAME }} is not a valid format.  It must start with action.
               exit 1
             fi
-            if [[ ${{ inputs.DEV_TEAM }} != "ccoe-dev-ops" ]]; then
-              echo For actions you must select ccoe-dev-ops as the dev team.
-              exit 1
-            fi
+            #if [[ ${{ inputs.DEV_TEAM }} != "ccoe-dev-ops" ]]; then
+            #  echo For actions you must select ccoe-dev-ops as the dev team.
+            #  exit 1
+            #fi
           elif [[ ${{ inputs.REPO_TYPE }} = "workflow" ]]; then
             if [[ ! ${{ inputs.REPO_NAME }} =~ ^workflow-[a-z][0-9a-z-]*[0-9a-z]$ ]]; then
               echo ${{ inputs.REPO_NAME }} is not a valid format.  It must start with workflow.
               exit 1
             fi
-            if [[ ${{ inputs.DEV_TEAM }} != "ccoe-dev-ops" ]]; then
-              echo For workflows you must select ccoe-dev-ops as the dev team.
-              exit 1
-            fi
+            #if [[ ${{ inputs.DEV_TEAM }} != "ccoe-dev-ops" ]]; then
+            #  echo For workflows you must select ccoe-dev-ops as the dev team.
+            #  exit 1
+            #fi
           elif [[ ${{ inputs.REPO_TYPE }} = "bicep-azurerm" ]]; then
             if [[ ! ${{ inputs.REPO_NAME }} =~ ^bicep-azurerm-[a-z][0-9a-z-]*[0-9a-z]$ ]]; then
               echo ${{ inputs.REPO_NAME }} is not a valid format.  It must start with bicep-azurerm.
